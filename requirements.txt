@@ -1,0 +1,7 @@
+streamlit>=1.30.0
+msal>=1.26.0
+google-cloud-datastore>=2.19.0
+cryptography>=42.0.0
+requests>=2.31.0
+pytz>=2023.3.post1
+python-dotenv>=1.0.0
