@@ -339,7 +339,50 @@ def render_scheduler_screen():
 def render_approval_mode(request_id: str):
     st.markdown("<h1>📅 Booking Approval <span class='gradient-text'>Console</span></h1>", unsafe_allow_html=True)
     st.write("Analyze and process the pending Outlook meeting room reservation.")
-    
+
+    # --- SECURITY CHECK 1: Approver must be authenticated ---
+    if "home_account_id" not in st.session_state:
+        # Preserve the request_id so we can return here after OAuth completes
+        st.session_state.pending_approval_request_id = request_id
+        st.markdown("""
+        <div class='glass-card' style='text-align:center; max-width:480px; margin:80px auto;'>
+            <h3>🔐 Approver Authentication Required</h3>
+            <p style='color:#aaa;'>Please sign in with your M365 account to access the approval console.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        redirect_uri = os.environ.get("REDIRECT_URI", "http://localhost:8501")
+        try:
+            auth_uri = auth.initiate_auth_flow(db_client, redirect_uri)
+            st.markdown(f"""
+            <div style='text-align:center; margin-top:15px;'>
+                <a href="{auth_uri}" target="_self" style="text-decoration:none;">
+                    <span style="background-color:#0078d4;color:white;padding:12px 30px;border-radius:6px;font-weight:bold;display:inline-block;">
+                        Sign In with Microsoft
+                    </span>
+                </a>
+            </div>
+            """, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"Failed to initiate login: {e}")
+        return
+
+    # --- SECURITY CHECK 2: Verify the logged-in user is an authorized approver ---
+    raw_approver_env = os.environ.get("APPROVER_EMAIL", "")
+    authorized_approvers = [e.strip().lower() for e in raw_approver_env.split(",") if e.strip()]
+    logged_in_email = (st.session_state.get("user_email") or "").lower()
+
+    if not authorized_approvers:
+        st.error("⚠️ APPROVER_EMAIL is not configured. Please set it in the environment variables.")
+        return
+
+    if logged_in_email not in authorized_approvers:
+        st.error(f"🚫 Access denied. Your account ({st.session_state.get('user_email')}) is not authorized to approve requests.")
+        st.info("Please contact the system administrator if you believe this is an error.")
+        if st.button("Sign out and try a different account"):
+            st.session_state.clear()
+            st.rerun()
+        return
+
     # Retrieve request
     request = db_client.get_booking_request(request_id)
     if not request:
@@ -349,6 +392,20 @@ def render_approval_mode(request_id: str):
             st.rerun()
         return
 
+    # --- SECURITY CHECK 3: Check if approval link has expired ---
+    expires_at_str = request.get("expires_at")
+    if expires_at_str:
+        try:
+            expires_at = datetime.datetime.fromisoformat(expires_at_str)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
+            if datetime.datetime.now(datetime.timezone.utc) > expires_at:
+                st.error("⏰ This approval link has expired (valid for 7 days from submission).")
+                st.info("Please ask the requester to submit a new booking request.")
+                db_client.update_booking_request_status(request_id, "expired")
+                return
+        except Exception as e:
+            logger.warning(f"Could not parse expires_at '{expires_at_str}': {e}")
     status = request.get("status", "pending")
     status_class = "status-pending"
     if status == "approved":
@@ -360,6 +417,7 @@ def render_approval_mode(request_id: str):
     <div class="glass-card">
         <h3 style="margin-top: 0;">{request['subject']}</h3>
         <p><strong>Status:</strong> <span class="status-badge {status_class}">{status}</span></p>
+        <p style="font-size:12px; color:#888;">Reviewing as: <strong>{st.session_state.get('user_name')} ({st.session_state.get('user_email')})</strong></p>
         <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 18px 0;">
         <table style="width: 100%; font-size: 15px;">
             <tr style="height: 35px;">
@@ -488,6 +546,12 @@ else:
                 st.session_state.user_name = account.get("name", account.get("username"))
                 
                 st.query_params.clear()
+                
+                # If the user was redirected here from the approval page, send them back
+                pending_request_id = st.session_state.pop("pending_approval_request_id", None)
+                if pending_request_id:
+                    st.query_params["request_id"] = pending_request_id
+                
                 st.rerun()
             except Exception as e:
                 st.error(f"Authentication completed with errors: {e}")

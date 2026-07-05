@@ -99,9 +99,15 @@ class DBClient:
                 status TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 processed_at TEXT,
-                approver_email TEXT
+                approver_email TEXT,
+                expires_at TEXT
             )
         """)
+        # Migration: add expires_at column to existing databases that don't have it
+        try:
+            cursor.execute("ALTER TABLE booking_requests ADD COLUMN expires_at TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists, safe to ignore
         conn.commit()
         conn.close()
 
@@ -226,10 +232,12 @@ class DBClient:
         if self.use_sqlite:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            # expires_at: 7 days from now (security: approval links expire)
+            expires_at = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)).isoformat()
             cursor.execute("""
                 INSERT OR REPLACE INTO booking_requests 
-                (request_id, subject, start_time, end_time, attendees, room_email, room_name, requester_id, requester_email, requester_name, status, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (request_id, subject, start_time, end_time, attendees, room_email, room_name, requester_id, requester_email, requester_name, status, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
             """, (
                 request_id,
                 request_data['subject'],
@@ -241,15 +249,18 @@ class DBClient:
                 request_data['requester_id'],
                 request_data['requester_email'],
                 request_data['requester_name'],
-                request_data.get('status', 'pending')
+                request_data.get('status', 'pending'),
+                expires_at
             ))
             conn.commit()
             conn.close()
         else:
             try:
                 from google.cloud import datastore
+                expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
                 key = self.datastore_client.key('BookingRequest', request_id)
-                entity = datastore.Entity(key=key)
+                # exclude_from_indexes for large text fields
+                entity = datastore.Entity(key=key, exclude_from_indexes=['subject'])
                 entity.update({
                     'subject': request_data['subject'],
                     'start_time': request_data['start_time'],
@@ -261,7 +272,8 @@ class DBClient:
                     'requester_email': request_data['requester_email'],
                     'requester_name': request_data['requester_name'],
                     'status': request_data.get('status', 'pending'),
-                    'created_at': datetime.datetime.now(datetime.timezone.utc)
+                    'created_at': datetime.datetime.now(datetime.timezone.utc),
+                    'expires_at': expires_at
                 })
                 self.datastore_client.put(entity)
             except Exception as e:
@@ -290,7 +302,8 @@ class DBClient:
                     'status': row[10],
                     'created_at': row[11],
                     'processed_at': row[12],
-                    'approver_email': row[13]
+                    'approver_email': row[13],
+                    'expires_at': row[14] if len(row) > 14 else None
                 }
             return None
         else:
@@ -312,7 +325,8 @@ class DBClient:
                         'status': entity.get('status'),
                         'created_at': entity.get('created_at').isoformat() if hasattr(entity.get('created_at'), 'isoformat') else entity.get('created_at'),
                         'processed_at': entity.get('processed_at').isoformat() if hasattr(entity.get('processed_at'), 'isoformat') else entity.get('processed_at'),
-                        'approver_email': entity.get('approver_email')
+                        'approver_email': entity.get('approver_email'),
+                        'expires_at': entity.get('expires_at').isoformat() if hasattr(entity.get('expires_at'), 'isoformat') else entity.get('expires_at')
                     }
             except Exception as e:
                 logger.error(f"Error fetching booking request from Datastore: {e}")

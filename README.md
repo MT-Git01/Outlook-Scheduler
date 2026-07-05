@@ -103,12 +103,32 @@ gcloud run deploy outlook-scheduler \
   --region asia-northeast1 \
   --cpu 2 \
   --memory 4Gi \
-  --allow-unauthenticated \
-  --set-env-vars CLIENT_ID=xxx,TENANT_ID=xxx,REDIRECT_URI=https://YOUR_CLOUDRUN_URL,APPROVER_EMAIL=xxx \
+  --no-allow-unauthenticated \
+  --set-env-vars CLIENT_ID=xxx,TENANT_ID=xxx,REDIRECT_URI=https://YOUR_CLOUDRUN_URL,APPROVER_EMAIL=approver1@co.jp,approver2@co.jp \
   --set-secrets CLIENT_SECRET=client-secret:latest,ENCRYPTION_KEY=encryption-key:latest
 ```
 
 > **注意**: `CLIENT_SECRET` と `ENCRYPTION_KEY` は必ず Secret Manager 経由で注入してください。環境変数への直接設定は避けてください。
+
+### IAP（Identity-Aware Proxy）の設定
+
+`--no-allow-unauthenticated` に設定した場合、Cloud Run への直接アクセスは拒否されます。
+社内ユーザーがアクセスできるよう IAP を設定してください。
+
+```bash
+# IAP を有効化
+gcloud iap web enable --resource-type=cloud-run \
+  --service=outlook-scheduler \
+  --region=asia-northeast1
+
+# 社内ユーザー/グループにアクセス権を付与
+gcloud iap web add-iam-policy-binding \
+  --resource-type=cloud-run \
+  --service=outlook-scheduler \
+  --region=asia-northeast1 \
+  --member="domain:yourcompany.com" \
+  --role="roles/iap.httpsResourceAccessor"
+```
 
 ## セキュリティ方針
 
