@@ -101,6 +101,8 @@ gcloud run deploy outlook-scheduler \
   --image gcr.io/YOUR_PROJECT_ID/outlook-scheduler \
   --platform managed \
   --region asia-northeast1 \
+  --cpu 2 \
+  --memory 8Gi \
   --allow-unauthenticated \
   --set-env-vars CLIENT_ID=xxx,TENANT_ID=xxx,REDIRECT_URI=https://YOUR_CLOUDRUN_URL,APPROVER_EMAIL=xxx \
   --set-secrets CLIENT_SECRET=client-secret:latest,ENCRYPTION_KEY=encryption-key:latest
