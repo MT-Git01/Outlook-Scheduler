@@ -2,6 +2,13 @@ import requests
 import logging
 from typing import List, Dict, Any, Optional
 
+# LOG_LEVEL env var controls verbosity (default: WARNING for production safety)
+import os
+_log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.WARNING),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
@@ -29,7 +36,9 @@ def get_rooms(token: str, min_capacity: int = 1) -> List[Dict[str, Any]]:
         while url:
             response = requests.get(url, headers=headers)
             if response.status_code != 200:
-                raise GraphException(f"Failed to fetch rooms: {response.text}")
+                # Log full response server-side only; never expose raw API response to UI
+                logger.error(f"get_rooms failed (HTTP {response.status_code}): {response.text}")
+                raise GraphException(f"Failed to retrieve conference rooms (HTTP {response.status_code}). Please contact your administrator.")
             data = response.json()
             all_rooms.extend(data.get("value", []))
             url = data.get("@odata.nextLink")  # None if no more pages
@@ -114,7 +123,8 @@ def find_meeting_times(
     try:
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code != 200:
-            raise GraphException(f"Failed to find meeting times: {response.text}")
+            logger.error(f"findMeetingTimes failed (HTTP {response.status_code}): {response.text}")
+            raise GraphException(f"Failed to search meeting times (HTTP {response.status_code}). Please try again or contact your administrator.")
             
         data = response.json()
         suggestions = data.get("meetingTimeSuggestions", [])
@@ -262,7 +272,8 @@ def send_approval_email(
     try:
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code != 202:
-            raise GraphException(f"Failed to send email: {response.text}")
+            logger.error(f"sendMail (approval) failed (HTTP {response.status_code}): {response.text}")
+            raise GraphException(f"Failed to send approval email (HTTP {response.status_code}). Please check mail permissions and try again.")
     except Exception as e:
         logger.error(f"Error sending approval email: {e}")
         raise GraphException(f"Error sending approval email: {e}")
@@ -328,7 +339,8 @@ def create_event(
     try:
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code != 201:
-            raise GraphException(f"Failed to create event: {response.text}")
+            logger.error(f"createEvent failed (HTTP {response.status_code}): {response.text}")
+            raise GraphException(f"Failed to create calendar event (HTTP {response.status_code}). The meeting room may no longer be available.")
         return response.json()
     except Exception as e:
         logger.error(f"Error in create_event: {e}")
@@ -378,7 +390,8 @@ def send_rejection_email(
     try:
         response = requests.post(url, headers=headers, json=payload)
         if response.status_code != 202:
-            raise GraphException(f"Failed to send rejection email: {response.text}")
+            logger.error(f"sendMail (rejection) failed (HTTP {response.status_code}): {response.text}")
+            raise GraphException(f"Failed to send rejection email (HTTP {response.status_code}).")
     except GraphException:
         raise
     except Exception as e:

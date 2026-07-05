@@ -7,7 +7,13 @@ from typing import Optional, Dict, Any
 from cryptography.fernet import Fernet
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+# LOG_LEVEL env var controls verbosity (default: WARNING for production safety)
+# Set LOG_LEVEL=DEBUG or LOG_LEVEL=INFO only in local development
+_log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.WARNING),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Temporary key for development fallback
@@ -188,6 +194,8 @@ class DBClient:
     def save_auth_flow(self, state: str, flow_dict: dict) -> None:
         """Saves the auth flow object linked with state parameter."""
         flow_json = json.dumps(flow_dict)
+        # Opportunistically clean up expired flows to prevent record accumulation
+        self._cleanup_expired_auth_flows()
         if self.use_sqlite:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -225,6 +233,37 @@ class DBClient:
                 self.datastore_client.delete(key)
             except Exception as e:
                 logger.error(f"Error deleting auth flow from Datastore: {e}")
+
+    def _cleanup_expired_auth_flows(self) -> None:
+        """Purges OAuth auth flow records older than 10 minutes.
+        Called opportunistically on each new auth flow to prevent accumulation.
+        Stale flows from abandoned logins or failed exchanges cannot be exploited
+        but do waste storage and clutter the database.
+        """
+        cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10)).isoformat()
+        if self.use_sqlite:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM auth_flows WHERE created_at < ?", (cutoff,))
+                deleted = cursor.rowcount
+                conn.commit()
+                conn.close()
+                if deleted > 0:
+                    logger.warning(f"Cleaned up {deleted} expired auth flow record(s).")
+            except Exception as e:
+                logger.error(f"Error cleaning up expired auth flows: {e}")
+        else:
+            try:
+                query = self.datastore_client.query(kind='AuthFlow')
+                query.add_filter('created_at', '<',
+                    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10))
+                expired_keys = [entity.key for entity in query.fetch()]
+                if expired_keys:
+                    self.datastore_client.delete_multi(expired_keys)
+                    logger.warning(f"Cleaned up {len(expired_keys)} expired auth flow record(s) from Datastore.")
+            except Exception as e:
+                logger.error(f"Error cleaning up expired auth flows from Datastore: {e}")
 
     # --- Booking Request Persistence ---
     def save_booking_request(self, request_id: str, request_data: dict) -> None:

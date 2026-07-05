@@ -1,7 +1,9 @@
-streamlit>=1.30.0
-msal>=1.26.0
-google-cloud-datastore>=2.19.0
-cryptography>=42.0.0
-requests>=2.31.0
-pytz>=2023.3.post1
-python-dotenv>=1.0.0
+# Production-pinned versions for security and reproducibility
+# To update: pip install -U <package> then re-pin
+streamlit==1.38.0
+msal==1.31.0
+google-cloud-datastore==2.19.1
+cryptography==43.0.1
+requests==2.32.3
+pytz==2024.1
+python-dotenv==1.0.1

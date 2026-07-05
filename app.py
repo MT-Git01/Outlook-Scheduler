@@ -13,7 +13,13 @@ import auth
 import graph_client
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+# LOG_LEVEL env var controls verbosity (default: WARNING for production safety)
+# Set LOG_LEVEL=DEBUG or LOG_LEVEL=INFO only in local development
+_log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.WARNING),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Initialize DB Client
